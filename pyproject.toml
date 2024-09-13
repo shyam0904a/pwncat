@@ -39,7 +39,7 @@ requests = "^2.25.1"
 rich = "^10.4.0"
 python-rapidjson = "^1.0"
 ZODB3 = "^3.11.0"
-zodburi = { git = "https://github.com/yourusername/zodburi.git", rev = "pull/34/head" }
+zodburi = { git = "https://github.com/Pylons/zodburi.git", rev = "pull/34/head" }
 Jinja2 = "^3.0.1"
 paramiko-ng = "^2.8.8"
 PyNaCl = "^1.4.0"
