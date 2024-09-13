@@ -934,7 +934,8 @@ class Manager:
 
             # Why is this check *not* part of pkgutil??????? D:<
             if module_name not in sys.modules:
-                module = loader.find_module(module_name).load_module(module_name)
+                module = loader.find_spec(module_name).loader.load_module(module_name)
+            
             else:
                 module = sys.modules[module_name]
 

@@ -433,8 +433,8 @@ class CommandParser:
             if module_name == "base":
                 continue
             self.commands.append(
-                loader.find_module(module_name)
-                .load_module(module_name)
+                loader.find_spec(module_name)
+                .loader.load_module(module_name)
                 .Command(manager)
             )
 
