@@ -15,6 +15,7 @@ version = "0.5.4"
 description = "Reverse and bind shell automation framework"
 readme = "README.md"
 repository = "https://github.com/calebstewart/pwncat"
+authors = ["Caleb Stewart <caleb.stewart94@gmail.com>", "John Hammond"]
 documentation = "https://pwncat.readthedocs.io"
 keywords = ["offsec", "cyber", "exploitation", "privesc", "automation"]
 packages = [
