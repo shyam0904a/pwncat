@@ -47,6 +47,7 @@ sphinx-toolbox = { version = "^2.15.2", optional = true }
 Sphinx = { version= "^4.0.2", optional = true }
 enum-tools = { version= "^0.7.0", optional = true }
 furo = { version= "^2021.11.23", optional = true }
+setuptools-distutils = "^1.0.0"  # Add this line to handle distutils deprecation
 
 [tool.poetry.dev-dependencies]
 isort = "^5.8.0"
