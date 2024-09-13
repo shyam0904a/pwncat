@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 import os.path
-
-import pkg_resources
+from importlib import resources
 
 import pwncat
 from pwncat.modules import Result, Status, Argument, BaseModule, ModuleFailed
 from pwncat.platform.windows import Windows, PowershellError
-
 
 class GroupInfo(Result):
     def __init__(self, name: str):
@@ -20,7 +18,6 @@ class GroupInfo(Result):
 
     def __str__(self):
         return self.name
-
 
 class Module(BaseModule):
     """
@@ -81,6 +78,7 @@ class Module(BaseModule):
             "ScriptModification/Remove-Comment.ps1",
         ],
     }
+
     POWERSPLOIT_URL = (
         "https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/"
     )
@@ -95,7 +93,6 @@ class Module(BaseModule):
     POWERUP_URL = "https://raw.githubusercontent.com/PowerShellMafia/PowerSploit/master/Privesc/PowerUp.ps1"
 
     def run(self, session: "pwncat.manager.Session", group: str):
-
         # Use the result system so that other modules can query available groups
         if group == "list":
             yield from (GroupInfo(name) for name in self.MODULES.keys())
@@ -103,19 +100,21 @@ class Module(BaseModule):
 
         # Ensure the user selected a valid group
         if group not in self.MODULES:
-            raise ModuleFailed(f"no such PowerSploit module: {group}")
+            raise ModuleFailed(f"No such PowerSploit module group: {group}")
 
         # Iterate over all sources in the group
         for url in self.MODULES[group]:
-            yield Status(f"loading {url.split('/')[-1]}")
-
-            path = pkg_resources.resource_filename(
-                "pwncat", os.path.join("data/PowerSploit", url)
-            )
+            yield Status(f"Loading {url.split('/')[-1]}")
 
             try:
-                # Attempt to load the script in the PowerShell context.
-                session.run("manage.powershell.import", path=path)
+                # Use importlib.resources to read the content of the file
+                file_content = resources.read_text("pwncat.data.PowerSploit", url.replace('/', '.'))
+                
+                # Attempt to load the script content in the PowerShell context.
+                session.run("manage.powershell.import_content", content=file_content)
             except PowershellError as exc:
                 # We failed, but continue loading other scripts. Just let the user know.
-                session.log(f"while loading {url.split('/')[-1]}: {str(exc)}")
+                session.log(f"While loading {url.split('/')[-1]}: {str(exc)}")
+            except FileNotFoundError:
+                # Handle the case where the file is not found
+                session.log(f"File not found: {url}")

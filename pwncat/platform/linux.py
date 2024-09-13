@@ -23,7 +23,8 @@ from io import TextIOWrapper, BufferedIOBase, UnsupportedOperation
 from typing import List, Union, BinaryIO, Optional, Generator
 from subprocess import TimeoutExpired, CalledProcessError
 
-import pkg_resources
+from importlib.resources import files
+import importlib
 
 import pwncat
 import pwncat.channel
@@ -578,8 +579,8 @@ class Linux(Platform):
         # Load a GTFOBins database to assist in common operations
         # without relying on specific binaries being available.
         self.gtfo = GTFOBins(
-            pkg_resources.resource_filename("pwncat", "data/gtfobins.json"), self.which
-        )
+            importlib.resources.files("pwncat").joinpath("data/gtfobins.json"), self.which        
+            )
 
         # Ensure history is disabled
         self.disable_history()

@@ -30,7 +30,6 @@ import queue
 import signal
 import socket
 import fnmatch
-import pkgutil
 import datetime
 import tempfile
 import threading
@@ -38,6 +37,8 @@ import contextlib
 from io import TextIOWrapper
 from enum import Enum, auto
 from typing import Dict, List, Tuple, Union, Callable, Optional, Generator
+import importlib.util
+import pkgutil
 
 import ZODB
 import zodburi
@@ -643,6 +644,7 @@ class Session:
             module = self.manager.modules.get(self.platform.name + "." + module_name)
         if module is None:
             module = self.manager.modules.get("agnostic." + module_name)
+
         if module is None:
             raise pwncat.modules.ModuleNotFound(module_name)
 
@@ -801,153 +803,34 @@ class Manager:
     factory functions for generating platforms, channels, database
     sessions, and executing modules.
     """
-
-    def __init__(self, config: str = None):
-        self.config = Config()
-        self.session_id = 0  # start with 0-indexed session IDs
-        self.sessions: Dict[int, Session] = {}
-        self.modules: Dict[str, pwncat.modules.BaseModule] = {}
-        self._target = None
-        self.parser = CommandParser(self)
-        self.interactive_running = False
-        self.db: ZODB.DB = None
-        self.listeners: List[Listener] = []
-
-        # This is needed because pwntools captures the terminal...
-        # there's no way officially to undo it, so this is a nasty
-        # hack. You can't use pwntools output after creating a manager.
-        self._patch_pwntools()
-
-        # Load standard modules
-        self.load_modules(*pwncat.modules.__path__)
-
-        # Get our data directory
-        data_home = os.environ.get("XDG_DATA_HOME", "~/.local/share")
-        if not data_home:
-            data_home = "~/.local/share"
-
-        # Expand the user path
-        data_home = os.path.expanduser(os.path.join(data_home, "pwncat"))
-
-        # Find modules directory
-        modules_dir = os.path.join(data_home, "modules")
-
-        # Load local modules if they exist
-        if os.path.isdir(modules_dir):
-            self.load_modules(modules_dir)
-
-        # Load global configuration script, if available
-        try:
-            with open("/etc/pwncat/pwncatrc") as filp:
-                self.parser.eval(filp.read(), "/etc/pwncat/pwncatrc")
-        except (FileNotFoundError, PermissionError):
-            pass
-
-        # Load user configuration script
-        user_rc = os.path.join(data_home, "pwncatrc")
-        try:
-            with open(user_rc) as filp:
-                self.parser.eval(filp.read(), user_rc)
-        except (FileNotFoundError, PermissionError):
-            pass
-
-        # Load local configuration script
-        if isinstance(config, str):
-            with open(config) as filp:
-                self.parser.eval(filp.read(), config)
-        elif config is not None:
-            self.parser.eval(config.read(), getattr(config, "name", "fileobj"))
-            config.close()
-        else:
-            try:
-                # If no config is specified, attempt to load `./pwncatrc`
-                # but don't fail if it doesn't exist.
-                with open("./pwncatrc") as filp:
-                    self.parser.eval(filp.read(), "./pwncatrc")
-            except (FileNotFoundError, PermissionError):
-                pass
-
-        if self.db is None:
-            self.open_database()
-
-    def __enter__(self):
-        """Begin manager context tracking"""
-
-        return self
-
-    def __exit__(self, _, __, ___):
-        """Ensure all sessions are closed"""
-
-        # Retrieve the existing session IDs list
-        session_ids = list(self.sessions.keys())
-
-        # Close each session based on its ``session_id``
-        for session_id in session_ids:
-            self.sessions[session_id].close()
-
-    def open_database(self):
-        """Create the internal engine and session builder
-        for this manager based on the configured database"""
-
-        if self.sessions and self.db is not None:
-            raise RuntimeError("cannot change database after sessions are established")
-
-        # Connect/open the database
-        factory_class, factory_args = zodburi.resolve_uri(self.config["db"])
-        storage = factory_class()
-        self.db = ZODB.DB(storage, **factory_args)
-
-        conn = self.db.open()
-
-        if not hasattr(conn.root, "targets"):
-            conn.root.targets = persistent.list.PersistentList()
-
-        if not hasattr(conn.root, "history"):
-            conn.root.history = persistent.list.PersistentList()
-
-        conn.transaction_manager.commit()
-        conn.close()
-
-        # Rebuild the command parser now that the database is available
-        self.parser = CommandParser(self)
-
-    def create_db_session(self):
-        """Create a new SQLAlchemy database session and return it"""
-
-        # Initialize a fallback database if needed
-        if self.db is None:
-            self.config.set("db", "memory://", glob=True)
-            self.open_database()
-
-        return self.db.open()
-
     def load_modules(self, *paths):
-        """Dynamically load modules from the specified paths
 
-        If a module has the same name as an already loaded module, it will
-        take it's place in the module list. This includes built-in modules.
-        """
+        for loader, full_module_name, _ in pkgutil.walk_packages(paths, prefix="pwncat.modules."):
+            try:
+                if full_module_name in sys.modules:
+                    module = sys.modules[full_module_name]
+                else:
+                    spec = importlib.util.find_spec(full_module_name)
+                    if spec is None:
+                        continue
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    sys.modules[full_module_name] = module
 
-        for loader, module_name, _ in pkgutil.walk_packages(
-            paths, prefix="pwncat.modules."
-        ):
+                if getattr(module, "Module", None) is None:
+                    continue
 
-            # Why is this check *not* part of pkgutil??????? D:<
-            if module_name not in sys.modules:
-                module = loader.find_spec(module_name).loader.load_module(module_name)
-            
-            else:
-                module = sys.modules[module_name]
+                # Extract the short module name
+                module_name = full_module_name.split("pwncat.modules.")[1]
 
-            if getattr(module, "Module", None) is None:
-                continue
+                # Create an instance of this module
+                self.modules[module_name] = module.Module()
 
-            # Create an instance of this module
-            module_name = module_name.split("pwncat.modules.")[1]
-            self.modules[module_name] = module.Module()
+                # Store its name so we know it later
+                setattr(self.modules[module_name], "name", module_name)
 
-            # Store it's name so we know it later
-            setattr(self.modules[module_name], "name", module_name)
+            except Exception as e:
+                print(f"Error loading module {full_module_name}: {str(e)}")
 
     def log(self, *args, **kwargs):
         """Output a log entry"""
@@ -1255,4 +1138,123 @@ class Manager:
             else:
                 self.target.platform.channel.send(byte)
 
-        return has_prefix
+        return has_prefix  
+
+    def __init__(self, config: str = None):
+        self.config = Config()
+        self.session_id = 0  # start with 0-indexed session IDs
+        self.sessions: Dict[int, Session] = {}
+        self.modules: Dict[str, pwncat.modules.BaseModule] = {}
+        self._target = None
+        self.parser = CommandParser(self)
+        self.interactive_running = False
+        self.db: ZODB.DB = None
+        self.listeners: List[Listener] = []
+
+        # This is needed because pwntools captures the terminal...
+        # there's no way officially to undo it, so this is a nasty
+        # hack. You can't use pwntools output after creating a manager.
+        self._patch_pwntools()
+
+        # Load standard modules
+        self.load_modules(*pwncat.modules.__path__)
+
+        # Get our data directory
+        data_home = os.environ.get("XDG_DATA_HOME", "~/.local/share")
+        if not data_home:
+            data_home = "~/.local/share"
+
+        # Expand the user path
+        data_home = os.path.expanduser(os.path.join(data_home, "pwncat"))
+
+        # Find modules directory
+        modules_dir = os.path.join(data_home, "modules")
+
+        # Load local modules if they exist
+        if os.path.isdir(modules_dir):
+            self.load_modules(modules_dir)
+
+        # Load global configuration script, if available
+        try:
+            with open("/etc/pwncat/pwncatrc") as filp:
+                self.parser.eval(filp.read(), "/etc/pwncat/pwncatrc")
+        except (FileNotFoundError, PermissionError):
+            pass
+
+        # Load user configuration script
+        user_rc = os.path.join(data_home, "pwncatrc")
+        try:
+            with open(user_rc) as filp:
+                self.parser.eval(filp.read(), user_rc)
+        except (FileNotFoundError, PermissionError):
+            pass
+
+        # Load local configuration script
+        if isinstance(config, str):
+            with open(config) as filp:
+                self.parser.eval(filp.read(), config)
+        elif config is not None:
+            self.parser.eval(config.read(), getattr(config, "name", "fileobj"))
+            config.close()
+        else:
+            try:
+                # If no config is specified, attempt to load `./pwncatrc`
+                # but don't fail if it doesn't exist.
+                with open("./pwncatrc") as filp:
+                    self.parser.eval(filp.read(), "./pwncatrc")
+            except (FileNotFoundError, PermissionError):
+                pass
+
+        if self.db is None:
+            self.open_database()
+
+    def __enter__(self):
+        """Begin manager context tracking"""
+
+        return self
+
+    def __exit__(self, _, __, ___):
+        """Ensure all sessions are closed"""
+
+        # Retrieve the existing session IDs list
+        session_ids = list(self.sessions.keys())
+
+        # Close each session based on its ``session_id``
+        for session_id in session_ids:
+            self.sessions[session_id].close()
+
+    def open_database(self):
+        """Create the internal engine and session builder
+        for this manager based on the configured database"""
+
+        if self.sessions and self.db is not None:
+            raise RuntimeError("cannot change database after sessions are established")
+
+        # Connect/open the database
+        factory_class, factory_args = zodburi.resolve_uri(self.config["db"])
+        storage = factory_class()
+        self.db = ZODB.DB(storage, **factory_args)
+
+        conn = self.db.open()
+
+        if not hasattr(conn.root, "targets"):
+            conn.root.targets = persistent.list.PersistentList()
+
+        if not hasattr(conn.root, "history"):
+            conn.root.history = persistent.list.PersistentList()
+
+        conn.transaction_manager.commit()
+        conn.close()
+
+        # Rebuild the command parser now that the database is available
+        self.parser = CommandParser(self)
+
+    def create_db_session(self):
+        """Create a new SQLAlchemy database session and return it"""
+
+        # Initialize a fallback database if needed
+        if self.db is None:
+            self.config.set("db", "memory://", glob=True)
+            self.open_database()
+
+        return self.db.open()

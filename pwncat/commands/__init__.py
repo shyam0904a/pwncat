@@ -40,13 +40,14 @@ import sys
 import tty
 import fcntl
 import shlex
-import pkgutil
 import termios
 import argparse
 from io import TextIOWrapper
 from enum import Enum, auto
 from typing import Dict, List, Type, Callable, Iterable
 from functools import partial
+import importlib
+import importlib.util
 
 import rich.text
 from pygments import token
@@ -425,24 +426,33 @@ class CommandParser:
 
     def __init__(self, manager: "pwncat.manager.Manager"):
         """We need to dynamically load commands from pwncat.commands"""
-
         self.manager = manager
         self.commands: List["CommandDefinition"] = []
 
-        for loader, module_name, is_pkg in pkgutil.walk_packages(__path__):
-            if module_name == "base":
-                continue
-            self.commands.append(
-                loader.find_spec(module_name)
-                .loader.load_module(module_name)
-                .Command(manager)
-            )
+        # Determine the path to the 'pwncat.commands' package
+        package_name = "pwncat.commands"
+        package_path = importlib.resources.path(package_name, "")
+        with package_path as path:
+            # Iterate over each module in the package
+            for module_name in os.listdir(path):
+                if module_name.endswith(".py") and module_name != "__init__.py":
+                    module_name = module_name[:-3]  # Strip '.py'
+                    module_spec = importlib.util.spec_from_file_location(
+                        module_name,
+                        os.path.join(path, f"{module_name}.py")
+                    )
+                    if module_spec is not None:
+                        module = importlib.util.module_from_spec(module_spec)
+                        module_spec.loader.exec_module(module)
+                        command_class = getattr(module, "Command", None)
+                        if command_class:
+                            self.commands.append(command_class(self.manager))
 
         self.prompt: PromptSession = None
         self.toolbar: PromptSession = None
         self.loading_complete = False
-        self.aliases: Dict[str, CommandDefinition] = {}
-        self.shortcuts: Dict[str, CommandDefinition] = {}
+        self.aliases: Dict[str, "CommandDefinition"] = {}
+        self.shortcuts: Dict[str, "CommandDefinition"] = {}
         self.found_prefix: bool = False
         # Saved terminal state to support switching between raw and normal
         # mode.
